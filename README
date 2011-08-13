@@ -1,0 +1,45 @@
+This is an experiment into genetic algorithms on Turing machines.
+We use the GNU Multi-Precision arithmetic library (GMP) to store
+our tapes as arbitrarily large integers, and use bit fiddling to
+implement the Turing Machine's read and write.
+
+These Turing machines are adapted from Turlough Neary's "Small
+universal Turing Machines", and use a binary alphabet. This
+keeps the logic simple, at the expense of a large number of
+states (15 in the standard case, 17 in the monotone machine).
+
+turing.c:
+This is a simple Turing Machine simulation. It contains a
+machine with a single tape and a single head.
+
+monotone.c:
+This implements a "monotone" Turing Machine. Such a machine
+has three tapes: an input tape, and output tape and a work
+tape. The work tape behaves like a standard Turing Machine,
+whilst the input and output tapes can only be moved one way.
+This ensures that input is never duplicated, and output is
+never overwritten.
+
+The transitions in a monotone Turing Machine can depend on
+the symbols under all three heads, but in this case we
+simply replace the halting state of Neary's machine with a
+simple branch to handle input and output. The tape contents
+(0 or 1) determine whether we read or write. If we read, the
+contents of the current input cell are written to the left
+of the work cell that told us to read. We then enter state 0.
+If we are writing to the output then we enter a new state,
+and then write the current work tape cell (0 or 1) to the
+output. Again we move left and enter state 0.
+
+Monotone machines are interesting because they a) do not halt
+and b) have a definite output.
+
+(a) is useful because, for our purposes, we do not care about
+machines that halt. This reduces the fraction of useless
+machines that we will encounter.
+(b) is useful because, for our purposes (investigating
+Kolmogorov complexity), we would like to know when to stop a
+machine that's not working. When we haven't got enough output
+yet, there's no way to know if we ever will (eg. we need a
+timeout), but once enough bits are written, we can stop the
+simulation.
