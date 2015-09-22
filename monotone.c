@@ -1,9 +1,18 @@
-// A Turing Machine implementation using the GNU Multi-Precision Arithmetic
-// library (GMP)
+// A Monotone Turing Machine implementation using the GNU Multi-Precision
+// Arithmetic library (GMP)
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <gmp.h>
+
+#define max(a,b) \
+   ({ __typeof__ (a) _a = (a); \
+       __typeof__ (b) _b = (b); \
+     _a > _b ? _a : _b; })
+#define min(a,b) \
+   ({ __typeof__ (a) _a = (a); \
+       __typeof__ (b) _b = (b); \
+     _a > _b ? _b : _a; })
 
 void in_place_update(
 	mpz_t tape,     mp_bitcnt_t *head,
@@ -218,7 +227,7 @@ void in_place_update(
 				break;
 			case 15:
 				// This is a new state which gives us I/O abilities. We treat a
-				// 0 as "read from input tape".put 0, move left, state 0
+				// 0 as "read from input tape".
 				if (mpz_tstbit(in_tape, *in_head)) {
 					// The input tape contains a 1. Write it to the work tape.
 					write = 1;
@@ -259,19 +268,38 @@ void in_place_update(
 	else {
 		if (*head == 0) {
 			// Don't fall off the end of the tape!
-			exit(0);
+			*head = *head + 1;
 		}
 		*head = *head - 1;
 	}
-	gmp_printf("%Zd\n", tape);
+	//gmp_printf("%Zd\n", tape);
 }
 
-int main() {
-	// Create a tape for our Monotone Turing Machine. This initialises to 0.
+void mutate_once(mpz_t tape) {
+	// Takes a tape (a binary number) and causes a mutation at some point on the
+	// tape. The bit to be flipped is determined by counting coin tosses until a
+	// tails appears.
+	mp_bitcnt_t to_flip = 0;
+	while (rand() % 2) {
+		to_flip++;
+	}
+
+	// We have the bit that needs flipping. Now flip it:
+	mpz_combit(tape, to_flip);
+}
+
+void run(mpz_t tape, mpz_t goal, unsigned long int goal_bits, unsigned int steps, mp_bitcnt_t *score, mpz_t *result) {
+	// Builds a monotone machine out of the given work tape, and runs it until
+	// it either generates the goal or performs the given number of steps.
+
+	// Create blank input and output tapes for our Monotone Turing Machine, and
+	// a copy of the work tape
 	mpz_t work_tape, in_tape, out_tape;
 	mpz_init(work_tape);
 	mpz_init(in_tape);
 	mpz_init(out_tape);
+	mpz_set(work_tape, tape);
+
 	// Define the heads as being at the "start" of the tapes. In our case, this
 	// is the least-significant bit, which is 0.
 	mp_bitcnt_t work_head = 0;
@@ -281,8 +309,123 @@ int main() {
 	// We start in state 0, arbitrarily
 	char state = 0;
 
-	int i;
-	for (i=0; i < 100; i++) {
+	unsigned int step = 0;
+	*score = goal_bits;
+	while ((work_head < goal_bits) && (step < steps)) {
 		in_place_update(work_tape, &work_head, in_tape, &in_head, out_tape, &out_head, &state);
+		*score = min(*score, mpz_hamdist(out_tape, goal));
+		step++;
 	}
+
+	// Clean up
+	if (result > 0) {
+		mpz_set(*result, out_tape);
+	}
+	mpz_clear(work_tape);
+	mpz_clear(in_tape);
+	mpz_clear(out_tape);
+}
+
+int main() {
+	// Entry point. First we define our goal:
+	mpz_t goal;		// This is the output we want to generate
+	mpz_init(goal);
+	mpz_set_ui(goal, (unsigned long int) 12345);
+	// Now we've got a goal number, we need to work out how many bits it
+	// contains (so that we can stop our machines when appropriate)
+	mpz_t temp;		// This will store 2^goal_bits
+	mpz_init(temp);
+	unsigned long int goal_bits = 0;		// This will store how many bits goal needs
+	// Keep increasing goal_bits until temp becomes bigger than goal
+	while (mpz_cmp(temp, goal) <= 0) {
+		// Set temp to be 2^goal_bits, and increment goal_bits
+		mpz_ui_pow_ui(temp, (unsigned long int) 2, ++goal_bits);
+	}
+	mpz_clear(temp);
+	// Our result is now one too many
+	goal_bits--;
+
+	// Now we define simulation parameters
+	unsigned int cutoff = 1000;		// Kill machines after this many steps
+	unsigned int attempts = 10;		// The number of machines to try
+	unsigned int population_size = 100;		// The number of machines to keep around
+
+	// Next we set up our population:
+	mpz_t* population = (mpz_t*) malloc(population_size * sizeof(mpz_t));		// Store the work tapes
+	mp_bitcnt_t* scores = (mp_bitcnt_t*) malloc(population_size * sizeof(mp_bitcnt_t));		// Store the best scores
+	int* above_average = (int*) malloc(population_size * sizeof(int));		// Which are keepers
+	int* below_average = (int*) malloc(population_size * sizeof(int));		// Which are losers
+	int above_average_n = 0;
+	int below_average_n = 0;
+	int average;
+	srand(time(0)); // Seed our random number generator
+	// Set up our arrays
+	unsigned int i;
+	for (i=0; i < population_size; i++) {
+		mpz_init(population[i]);
+		above_average[i] = -1;
+		below_average[i] = -1;
+	}
+
+	unsigned int attempt = 0;
+	mp_bitcnt_t min_score = goal_bits;
+	mp_bitcnt_t max_score = 0;
+	while (attempt < attempts) {
+		// Run all of the machines in the population and get their scores
+		min_score = goal_bits;
+		max_score = 0;
+		for (i=0; i < population_size; i++) {
+			printf(",");
+			run(population[i], goal, goal_bits, cutoff, &scores[i], (mpz_t*) 0);
+			min_score = min(min_score, scores[i]);
+			max_score = max(max_score, scores[i]);
+		}
+
+		// Find the average score (rounded down to be conservative)
+		average = (max_score - min_score) / 2;
+
+		// Categorise our results
+		below_average_n = 0;
+		above_average_n = 0;
+		for (i=0; i < population_size; i++) {
+			if (scores[i] < average) {
+				// Mark this for dropping
+				below_average[below_average_n] = i;
+				below_average_n++;
+			}
+			else {
+				// Mark this for keeping
+				above_average[above_average_n] = i;
+				above_average_n++;
+			}
+		}
+
+		if (attempt < (attempts-1)) {
+			// Now replace those to be dropped with clones of those to be kept
+			for (i=0; i < below_average_n; i++) {
+				mpz_set(population[below_average[i]], population[above_average[rand() % above_average_n]]);
+			}
+
+			// Now mutate our population
+			for (i=0; i < population_size; i++) {
+				mutate_once(population[i]);
+			}
+		}
+		
+		attempt++;
+		printf(".");
+	}
+
+	// Our simulation is over. Let's run the best.
+	mpz_t result;
+	mpz_init(result);
+	for (i=0; i < population_size; i++) {
+		if (scores[i] == min_score) {
+			run(population[i], goal, goal_bits, cutoff, &scores[i], &result);
+			break;
+		}
+	}
+		
+	printf("%Zd\n",result);
+	
 }
